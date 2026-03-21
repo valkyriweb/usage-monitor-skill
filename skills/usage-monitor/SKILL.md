@@ -5,105 +5,89 @@ description: Monitor Claude Code and Codex subscription usage, compare weekly bu
 
 # Usage Monitor
 
-Use the bundled scripts to fetch live Claude Code and Codex rate-limit data, log snapshots, and report whether usage is healthy, ahead of pace, or approaching a cap.
+Fetch live Claude Code and Codex rate-limit data via CodexBar and report whether usage is healthy, ahead of pace, or approaching a cap.
 
-## Run the monitor
+## Dependency
 
-From the skill directory, run:
+[CodexBar](https://codexbar.app/) CLI: `brew install --cask steipete/tap/codexbar`
+
+## Fetch usage
 
 ```bash
-scripts/usage-check.sh 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+codexbar --provider all --format json --pretty
 ```
 
-The script:
-- fetches **Claude Code** usage from Anthropic OAuth usage API using the locally authenticated Claude Code session
-- fetches **Codex** usage from Codex app-server `account/rateLimits/read` using the locally authenticated ChatGPT/Codex session
-- falls back to recent Codex JSONL session snapshots only if the app-server rate-limit RPC fails
-- appends a JSONL snapshot to `~/.claude/usage-log.json`
+Single provider:
+```bash
+codexbar --provider claude --format json --pretty
+codexbar --provider codex --format json --pretty
+```
+
+CodexBar handles auth internally (browser cookies, CLI sessions, OAuth). No tokens or credentials needed.
+
+## JSON field reference
+
+**Claude** (`.[] | select(.provider == "claude")`):
+- `.usage.primary.usedPercent` → 5-hour session %
+- `.usage.secondary.usedPercent` → weekly %
+- `.usage.tertiary.usedPercent` → weekly Sonnet % (null when N/A)
+- `.usage.primary.resetsAt` → session reset ISO timestamp
+- `.usage.secondary.resetsAt` → weekly reset ISO timestamp
+- `.usage.identity.loginMethod` → plan name (e.g. "Claude Max")
+- `.usage.providerCost.used` / `.usage.providerCost.limit` → monthly cost
+
+**Codex** (`.[] | select(.provider == "codex")`):
+- `.openaiDashboard.primaryLimit.usedPercent` → 5-hour session %
+- `.openaiDashboard.secondaryLimit.usedPercent` → weekly %
+- `.openaiDashboard.secondaryLimit.resetsAt` → weekly reset ISO timestamp
+- `.openaiDashboard.accountPlan` → plan name (e.g. "Plus")
+- `.credits.remaining` → credits remaining
 
 ## Reporting
 
 When reporting, cover:
-- Claude short-window usage
-- Claude weekly usage
-- Codex short-window usage
-- Codex weekly usage
-- weekly reset times
-- whether weekly usage is ahead of, on, or behind pace
-- whether one provider has enough spare headroom to bias more work there
-- whether short-window pressure is only a temporary operational issue or part of a larger weekly budget problem
+- Claude and Codex short-window usage
+- Claude and Codex weekly usage
+- Weekly reset times
+- Whether weekly usage is ahead of, on, or behind pace
+- Whether one provider has enough spare headroom to bias more work there
+- Whether short-window pressure is temporary or part of a larger weekly budget problem
 
-For trends, inspect recent entries:
+## Weekly pacing
 
+Calculate expected usage as `(elapsed_hours / 168) * 100` using the actual reset timestamp.
+
+- **ok**: within ~5% of expected pace
+- **warning**: 5–20% ahead of expected pace
+- **over**: >20% ahead of expected pace
+- **under**: >10% behind expected pace
+
+## Short-window usage
+
+Treat 5-hour pressure as operational, not strategic.
+- High session + healthy weekly → wait or use fallback
+- High session + high weekly → switch work to the provider with more headroom
+
+## Codex underuse bias
+
+If Codex weekly is low while Claude is running hot, recommend routing appropriate work to Codex:
+- Research, summaries, background analysis
+- Low-risk automations, recurring monitoring
+- Exploratory or one-shot work
+
+This is a **bias**, not a universal forced switch.
+
+## Trends
+
+For historical trends, inspect the usage log:
 ```bash
 tail -10 ~/.claude/usage-log.json | jq -s '.'
 ```
 
-If history is sparse, say so plainly instead of pretending there is a reliable trend.
+If history is sparse, say so plainly.
 
-## Interpretation rules
+## Privacy
 
-### Weekly pacing
-Treat the weekly window as the main budget constraint.
-
-Default guidance:
-- **ok**: within roughly 5% of expected pace
-- **warning**: around 5–20% ahead of expected pace
-- **over**: more than 20% ahead of expected pace
-
-Use actual reset timestamps when available instead of assuming neat calendar boundaries.
-
-### Short-window usage
-Treat short-window / 5-hour pressure as an operational signal, not the primary strategic one.
-- If short-window usage is high but weekly budget is healthy, fallback chains or brief waiting may be enough.
-- If weekly usage is also high, recommend switching more work to the provider with more headroom.
-
-### Codex underuse bias
-If Codex weekly usage is very low, stale, or clearly underused while Claude is running hot, recommend routing appropriate extra work to Codex:
-- research
-- summaries
-- background analysis
-- low-risk automations
-- recurring monitoring tasks
-- exploratory or one-shot work
-
-Treat this as a **bias**, not a universal forced switch.
-
-## Source of truth and fallback order
-- **Claude:** Anthropic OAuth usage API
-- **Codex primary:** Codex app-server RPC
-- **Codex fallback:** recent local JSONL session snapshots
-
-Do not treat Codex JSONL as the canonical source when app-server data is available.
-
-## Failure handling
-If one provider cannot be read:
-- report that clearly
-- keep the last-known or fallback data separate from live data
-- do not overstate confidence
-- continue reporting the other provider if it is available
-
-## Privacy and security
-This skill must not contain embedded credentials, account ids, email addresses, tokens, refresh tokens, or machine-specific secrets.
-
-Allowed behavior:
-- read the user's existing local Claude/Codex login state at runtime
-- call the Anthropic OAuth usage endpoint for the locally authenticated user
-- call the local Codex app-server RPC for the locally authenticated user
-- read local Codex session JSONL only as fallback
-- append usage snapshots to the user's local log file
-
-Do not:
-- print tokens
-- copy auth files into the repo
-- send usage data to third-party services
-- hardcode private absolute user paths into the published skill
-- broaden scope into generic shell/network automation unrelated to usage monitoring
-
-## Portability
-Keep the skill portable across machines by using `$HOME`, relative script paths, and runtime discovery instead of hardcoded machine-specific paths.
-
-## Notes
-- Prefer the bundled scripts over ad-hoc scraping.
-- Keep output structured and explicit enough that a separate policy layer can consume it later.
-- If the user asks for automatic switching or policy decisions, use this skill as the telemetry layer rather than mixing policy logic into fragile ad-hoc commands.
+- CodexBar reuses existing browser cookies — no passwords stored
+- Do not print tokens or copy auth files
+- Do not send usage data to third-party services
